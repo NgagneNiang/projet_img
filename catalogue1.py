@@ -302,247 +302,235 @@
 # print(f"   - Strates traitées avec succès: {total_processed}")
 # print(f"   - Erreurs rencontrées: {total_errors}")
 # print(f"   - Total strates: {len(strates)}")
-
 import os
 import glob
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import docx
-from docx.shared import Inches, Pt
-from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
+from docx.shared import Inches, Pt, Cm
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from math import ceil
+import traceback
 
 # === Paramètres ===
-root_path = r"F:\projet\projet_img"
+root_path = r"F:\projet\projet_img" 
 DPI = 96
-CM_TO_PX = DPI * 0.393701
-PLACEHOLDER_IMG = "placeholder.jpg"  # (optionnel)
+LOG_FILE = "log_erreurs.txt"
+# IMPORTANT: Assurez-vous que ce fichier existe dans le dossier du script
+PLACEHOLDER_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "placeholder.jpg")
 
-# === Extraction des images avec structure à 3 niveaux ===
+# === Fonctions utilitaires (inchangées) ===
 def process_strate(strate_path):
+    # ... (code identique à la version précédente) ...
     images = []
-    print(f"  📁 Traitement du dossier: {strate_path}")
-
     if not os.path.exists(strate_path):
         print(f"  ❌ Dossier inexistant: {strate_path}")
         return images
-
     for product_dir in os.listdir(strate_path):
         product_path = os.path.join(strate_path, product_dir)
-        if not os.path.isdir(product_path):
-            continue
-
-        print(f"    📂 Produit: {product_dir}")
-
+        if not os.path.isdir(product_path): continue
+        product_name = product_dir.strip()
         for unit_dir in os.listdir(product_path):
             unit_path = os.path.join(product_path, unit_dir)
-            if not os.path.isdir(unit_path):
-                continue
-
-            print(f"      📦 Unité: {unit_dir}")
-            best_img = None
-            best_size = 0
-
+            if not os.path.isdir(unit_path): continue
+            best_img, best_size = None, 0
             for file in os.listdir(unit_path):
                 if file.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff')):
                     img_path = os.path.join(unit_path, file)
                     try:
                         file_size = os.path.getsize(img_path)
                         if file_size > best_size:
-                            best_size = file_size
-                            best_img = img_path
-                        print(f"        🖼️ Image trouvée: {file} ({file_size} bytes)")
-                    except Exception as e:
-                        print(f"        ❌ Erreur avec {file}: {e}")
-                        continue
-
+                            best_size, best_img = file_size, img_path
+                    except OSError: continue
             if best_img:
                 images.append({
                     'path': best_img,
-                    'libelle_groupe': product_dir.strip(),
-                    'libelle_pdt': product_dir.strip(),
+                    'libelle_produit': product_name,
                     'libelle_unite': unit_dir.strip()
                 })
-                print(f"        ✅ Meilleure image sélectionnée: {os.path.basename(best_img)}")
-            else:
-                print(f"        ⚠️ Aucune image trouvée dans {unit_dir}")
-
-    print(f"  📊 Total images trouvées pour cette strate: {len(images)}")
     return images
 
-# === Regroupement ===
 def group_images_by_product(images_list):
+    # ... (code identique à la version précédente) ...
     grouped = {}
     for img in images_list:
-        product = img['libelle_groupe']
-        if product not in grouped:
-            grouped[product] = []
+        product = img['libelle_produit']
+        if product not in grouped: grouped[product] = []
         grouped[product].append(img)
     return grouped
 
-# === Redimensionnement d’image ===
-def resize_image_to_fixed_size(img_path, target_width_cm=7, target_height_cm=5):
-    try:
-        with Image.open(img_path) as img:
-            img.verify()  # test rapide
-        with Image.open(img_path) as img:  # recharger pour traitement
-            target_width_px = int(target_width_cm * CM_TO_PX)
-            target_height_px = int(target_height_cm * CM_TO_PX)
-            img_ratio = img.width / img.height
-            target_ratio = target_width_px / target_height_px
+def log_error(path, message):
+    # ... (code identique à la version précédente) ...
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{path} => {message}\n")
 
-            if img_ratio > target_ratio:
-                new_width = target_width_px
-                new_height = int(target_width_px / img_ratio)
-            else:
-                new_height = target_height_px
-                new_width = int(target_height_px * img_ratio)
-
-            img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            base, ext = os.path.splitext(img_path)
-            temp_path = f"{base}_resized{ext}"
-            img_resized.save(temp_path, quality=95)
-            return temp_path
-    except Exception as e:
-        print(f"    ❌ Erreur redimensionnement {img_path}: {e}")
-        log_error(img_path, f"Redimensionnement impossible : {e}")
-        return None
-
-# === Nettoyage des fichiers temporaires ===
 def cleanup_temp_images(directory):
-    for file in glob.glob(os.path.join(directory, '*_resized.*')):
-        try:
-            os.remove(file)
-        except Exception as e:
-            print(f"⚠️  Erreur suppression {file}: {e}")
+    # ... (code identique à la version précédente) ...
+    for file in glob.glob(os.path.join(directory, '**', '*_resized.*'), recursive=True):
+        try: os.remove(file)
+        except Exception as e: print(f"⚠️  Erreur suppression {file}: {e}")
 
-# === Suppression des bordures ===
-def set_no_borders(table):
+def set_table_borders_invisible(table):
+    # ... (code identique à la version précédente) ...
     tbl = table._tbl
-    for row in tbl.tr_lst:
-        for cell in row.tc_lst:
-            tcPr = cell.tcPr
-            tcBorders = parse_xml(
-                r'<w:tcBorders %s><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/></w:tcBorders>' % nsdecls('w')
-            )
-            tcPr.append(tcBorders)
+    tblPr = tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr')
+        tbl.insert(0, tblPr)
+    tblBorders = tblPr.first_child_found_in("w:tblBorders")
+    if tblBorders is None:
+        tblBorders = OxmlElement('w:tblBorders')
+        tblPr.append(tblBorders)
+    for border_name in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        border_el = OxmlElement(f'w:{border_name}')
+        border_el.set(qn('w:val'), 'nil')
+        tblBorders.append(border_el)
 
-# === Journal des erreurs ===
-def log_error(img_path, message):
-    with open("log_erreurs.txt", "a", encoding="utf-8") as f:
-        f.write(f"{img_path} => {message}\n")
 
-# === Création du document Word ===
-# === Création du catalogue Word ===
+# === AMÉLIORATION MAJEURE: Redimensionnement avec Placeholder ===
+def process_and_resize_image(img_path, target_width_inches):
+    """
+    Tente de redimensionner l'image. En cas d'échec, renvoie le chemin
+    de l'image de remplacement (placeholder).
+    """
+    try:
+        # Vérifie si le fichier image existe et n'est pas vide
+        if not os.path.exists(img_path) or os.path.getsize(img_path) == 0:
+            raise FileNotFoundError("Fichier inexistant ou vide.")
+
+        with Image.open(img_path) as img:
+            target_width_px = int(target_width_inches * DPI)
+            img.thumbnail((target_width_px, 9999), Image.Resampling.LANCZOS)
+            
+            base, ext = os.path.splitext(img_path)
+            save_ext = ".jpeg" if ext.lower() in [".jpg", ".jpeg"] else ".png"
+            temp_path = f"{base}_resized{save_ext}"
+            
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+                
+            img.save(temp_path, quality=90)
+            return temp_path
+
+    except (UnidentifiedImageError, FileNotFoundError, OSError) as e:
+        print(f"    ❌ ERREUR IMAGE : {os.path.basename(img_path)}. Utilisation du placeholder. Raison: {e}")
+        log_error(img_path, f"Image corrompue ou illisible ({e}). Remplacée par placeholder.")
+        return PLACEHOLDER_IMAGE
+    except Exception as e:
+        print(f"    ❌ ERREUR INCONNUE sur {os.path.basename(img_path)}. Utilisation du placeholder. Raison: {e}")
+        log_error(img_path, f"Erreur de traitement inattendue ({e}). Remplacée par placeholder.")
+        return PLACEHOLDER_IMAGE
+
+# === VERSION FINALE: Génération du catalogue ===
 def create_word_catalog(images_list, strate_name, output_filename):
     if not images_list:
         print(f"  ⚠️ Aucune image à traiter pour {strate_name}")
         return
 
-    doc = docx.Document()
+    # Vérifier si l'image de remplacement existe avant de commencer
+    if not os.path.exists(PLACEHOLDER_IMAGE):
+        print(f"FATAL: L'image de remplacement '{PLACEHOLDER_IMAGE}' est introuvable. Veuillez la créer.")
+        return
 
-    # Marges
-    for section in doc.sections:
-        section.top_margin = Inches(0.5)
-        section.bottom_margin = Inches(0.5)
-        section.left_margin = Inches(0.5)
-        section.right_margin = Inches(0.5)
+    doc = docx.Document()
+    section = doc.sections[0]
+    section.top_margin, section.bottom_margin = Cm(1.5), Cm(1.5)
+    section.left_margin, section.right_margin = Cm(1.5), Cm(1.5)
 
     grouped_images = group_images_by_product(images_list)
-    print(f"  📑 Création du catalogue avec {len(grouped_images)} groupes")
+    print(f"  🎨 Création du catalogue design avec {len(grouped_images)} groupes de produits.")
 
-    rows_per_page = 3
-    cols_per_page = 2
-    images_per_page = rows_per_page * cols_per_page
+    IMAGES_PER_ROW = 2
+    GUTTER_WIDTH_CM = 1.2
+    page_width_cm = section.page_width.cm - section.left_margin.cm - section.right_margin.cm
+    cell_width_cm = (page_width_cm - GUTTER_WIDTH_CM * (IMAGES_PER_ROW - 1)) / IMAGES_PER_ROW
+    image_width_cm = cell_width_cm - 0.2
+
+    title = doc.add_heading(strate_name, level=1)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.runs[0].font.size, title.runs[0].bold = Pt(20), True
 
     for product_name, product_images in grouped_images.items():
-        print(f"    🧾 Produit: {product_name} ({len(product_images)} images)")
+        sub_title = doc.add_paragraph()
+        run = sub_title.add_run(product_name)
+        run.bold, run.font.size = True, Pt(14)
+        sub_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub_title.paragraph_format.space_before, sub_title.paragraph_format.space_after = Pt(18), Pt(8)
 
-        for i in range(0, len(product_images), images_per_page):
-            page_images = product_images[i:i + images_per_page]
+        num_rows = ceil(len(product_images) / IMAGES_PER_ROW)
+        table = doc.add_table(rows=num_rows, cols=IMAGES_PER_ROW)
+        table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        set_table_borders_invisible(table)
+        
+        for col in table.columns:
+            col.width = Cm(cell_width_cm)
 
-            title_paragraph = doc.add_paragraph()
-            run = title_paragraph.add_run(f"{strate_name} - {product_name}")
-            run.font.size = Pt(16)
-            run.bold = True
-            title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        img_iterator = iter(product_images)
+        for i in range(num_rows):
+            for j in range(IMAGES_PER_ROW):
+                try:
+                    img_info = next(img_iterator)
+                    cell = table.cell(i, j)
+                    cell.text = ''
+                    cell.vertical_alignment = docx.enum.table.WD_ALIGN_VERTICAL.TOP
 
-            table = doc.add_table(rows=rows_per_page, cols=cols_per_page)
-            table.style = "Table Grid"
-            set_no_borders(table)
+                    caption_text = f"{img_info['libelle_produit']} - {img_info['libelle_unite']}"
+                    cap_para = cell.add_paragraph()
+                    cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    run = cap_para.add_run(caption_text)
+                    run.bold, run.font.size = True, Pt(10)
+                    cap_para.paragraph_format.space_after = Pt(6)
 
-            for row in range(rows_per_page):
-                for col in range(cols_per_page):
-                    idx = row * cols_per_page + col
-                    if idx < len(page_images):
-                        img_info = page_images[idx]
-                        cell = table.cell(row, col)
-                        cell.text = ""
+                    # --- Logique simplifiée ---
+                    # Cette fonction renvoie TOUJOURS un chemin valide (soit l'image, soit le placeholder)
+                    image_to_insert = process_and_resize_image(img_info['path'], target_width_inches=Cm(image_width_cm).inches)
+                    
+                    para_img = cell.add_paragraph()
+                    para_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    para_img.add_run().add_picture(image_to_insert, width=Cm(image_width_cm))
+                    
+                    if image_to_insert != PLACEHOLDER_IMAGE:
+                         print(f"      ✅ Image ajoutée : {os.path.basename(img_info['path'])}")
 
-                        # Titre
-                        para = cell.add_paragraph()
-                        para.text = f"{img_info['libelle_pdt']} - {img_info['libelle_unite']}"
-                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-                        # Image
-                        try:
-                            resized_path = resize_image_to_fixed_size(img_info['path'])
-                            if resized_path:
-                                img_para = cell.add_paragraph()
-                                img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                run = img_para.add_run()
-                                run.add_picture(resized_path, width=Inches(2.5), height=Inches(1.8))
-                                print(f"      ✅ Image ajoutée: {os.path.basename(img_info['path'])}")
-                            else:
-                                raise Exception("Image non redimensionnée")
-                        except Exception as e:
-                            print(f"      ❌ Erreur ajout image {img_info['path']}: {e}")
-                            log_error(img_info['path'], f"Insertion échouée : {e}")
-                            cell.add_paragraph("[Image indisponible]").alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-            # Saut de page si nécessaire
-            doc.add_page_break()
+                except StopIteration:
+                    pass
+                except Exception:
+                    log_error(img_info.get('path', 'inconnue'), f"Erreur insertion Word: {traceback.format_exc()}")
+        
+        doc.add_paragraph("").paragraph_format.space_after = Pt(6)
 
     try:
         doc.save(output_filename)
-        print(f"  ✅ Catalogue sauvegardé : {output_filename}")
+        print(f"\n  ✅ Catalogue design généré : {output_filename}")
     except Exception as e:
-        print(f"  ❌ Erreur sauvegarde : {e}")
+        print(f"  ❌ Erreur de sauvegarde du document : {e}")
         log_error(output_filename, f"Sauvegarde échouée : {e}")
 
-# === Lancement global ===
+    cleanup_temp_images(root_path)
+
+# === Lancement ===
 if __name__ == "__main__":
-    print("🚀 Lancement de la génération des catalogues")
-    print(f"📁 Dossier racine : {root_path}")
-
-    strates = [
-        "101_KOLDA"
+    if os.path.exists(LOG_FILE): os.remove(LOG_FILE)
         
-    ]
-
-    total_ok = 0
-    total_errors = 0
+    strates = ["101_KOLDA"]
+    print("🚀 Démarrage de la génération des catalogues design...")
+    print(f"📂 Répertoire racine: {root_path}")
 
     for strate in strates:
         strate_path = os.path.join(root_path, strate)
-        if os.path.exists(strate_path):
-            print(f"\n▶️ Traitement de la strate : {strate}")
-            try:
-                images = process_strate(strate_path)
-                if images:
-                    output_file = os.path.join(strate_path, f"{strate}_catalogue.docx")
-                    create_word_catalog(images, strate, output_file)
-                    cleanup_temp_images(strate_path)
-                    total_ok += 1
-                else:
-                    print(f"  ⚠️ Aucune image valide pour {strate}")
-            except Exception as e:
-                print(f"  ❌ Erreur lors du traitement de {strate} : {e}")
-                log_error(strate, f"Erreur globale : {e}")
-                total_errors += 1
-        else:
-            print(f"  ❌ Dossier inexistant : {strate_path}")
-            total_errors += 1
+        print(f"\n▶️ Traitement de la strate : {strate}")
+        try:
+            images = process_strate(strate_path)
+            if images:
+                output_file = os.path.join(root_path, f"{strate}_catalogue_design_final.docx")
+                create_word_catalog(images, strate, output_file)
+            else:
+                print(f"  ⚠️ Aucune image trouvée ou traitée dans {strate}")
+        except Exception as e:
+            print(f"  ❌ Erreur majeure lors du traitement de {strate}: {e}")
+            log_error(strate_path, f"Erreur globale : {traceback.format_exc()}")
 
-    print("\n✅ Fin de la génération.")
-    print(f"📊 Statistiques : {total_ok} traitées, {total_errors} erreurs.")
+    print("\n\n✅ Génération terminée !")
+    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 0:
+        print(f"ℹ️  Un journal des erreurs a été créé ici : {os.path.abspath(LOG_FILE)}")
